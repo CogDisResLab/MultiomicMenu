@@ -294,7 +294,7 @@ ppi <- bind_rows(string_ppi, phuego_ppi) %>%
     summarise(cost = mean(cost)) %>%
     ungroup()
 
-kinograte_res <- quiet(kinograte(combined_df %>% slice_sample(n=250)
+kinograte_res <- quiet(kinograte(combined_df #%>% slice_sample(n=250) Remove for testing small integrations
                                  , ppi_network = ppi, cluster = F, seed = 123, mu=1e-4))
 ```
 
