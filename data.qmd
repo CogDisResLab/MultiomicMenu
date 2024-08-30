@@ -256,7 +256,7 @@ get_chea3_enrichment <- function(genes, query_name = "myQuery", url = "https://m
 #Predict transcription factors involved in all the data so far
 chea3_results <- get_chea3_enrichment(data %>% map(pull, name) %>% unlist) %>%
   percentile_rank(`TF`, `Rank`, desc = TRUE) %>%
-  top_hits(prec_cutoff = -0.1, omic_type = "TF")
+  top_hits(prec_cutoff = .9, omic_type = "TF") #Currently, select the top 10%
 
 # CHEA3 always returns human symbols, lets convert back.
 if(params$species != "human") {
@@ -294,7 +294,7 @@ ppi <- bind_rows(string_ppi, phuego_ppi) %>%
     summarise(cost = mean(cost)) %>%
     ungroup()
 
-kinograte_res <- quiet(kinograte(combined_df# %>% slice_sample(n=1000)
+kinograte_res <- quiet(kinograte(combined_df %>% slice_sample(n=250)
                                  , ppi_network = ppi, cluster = F, seed = 123, mu=1e-4))
 ```
 
@@ -302,7 +302,7 @@ kinograte_res <- quiet(kinograte(combined_df# %>% slice_sample(n=1000)
 #| label: "data_visualizations"
 make_table(combined_df)
 
-score_plot <- function(df, prec_cutoff = 0.8, title = "Prize Plot", subtitle = "", interactive = T) {
+score_plot <- function(df, title = "Prize Plot", subtitle = "", interactive = T) {
   
   df %>% 
     dplyr::mutate_if(is.numeric, round, 3) -> df
@@ -314,7 +314,6 @@ score_plot <- function(df, prec_cutoff = 0.8, title = "Prize Plot", subtitle = "
       echarts4r::e_visual_map(score) %>% 
       echarts4r::e_x_axis(axisLabel =  list(show  = F)) %>% 
       echarts4r::e_y_axis(name = "Normalized Prize", nameLocation = "center", nameGap = 40, nameTextStyle =  list()) %>% 
-      #echarts4r::e_mark_line(data = list(yAxis = prec_cutoff), title = "Score Cutoff", symbolSize = F, silent = T) %>% 
       echarts4r::e_tooltip(trigger = "axis") %>% 
       echarts4r::e_title(title, subtext = subtitle)
   }

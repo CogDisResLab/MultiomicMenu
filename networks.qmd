@@ -5,7 +5,7 @@ date: last-modified
 date-format: "[Last Updated on] MMMM DD, YYYY"
 ---
 
-These are your pathways.
+These are your networks.
 
 ```{r}
 #| label: "networks_common"
@@ -31,15 +31,14 @@ generate_subnetwork <- function(kinograte_res, genes) {
          Kinase = as.numeric(str_detect(type.y, "Kinase")),
          Hidden = as.numeric(str_detect(type.y, "Hidden")),
          Protein = as.numeric(str_detect(type.y, "Protein")),
-         Special = sample(c(TRUE, FALSE), nrow(.), replace = TRUE))
+         Peptide = as.numeric(str_detect(type.y, "Peptide")),
+         TF = as.numeric(str_detect(type.y, "TF")))
 
   plot = plot_data %>%
     ggplot(aes(x = x, y = y, xend = xend, yend = yend)) +
     geom_edges(color = "grey50", curvature = 0.05) +
-    #geom_nodes(aes(color=Special), size=11)+
-    #geom_nodes(size=9, color = "white")+
-    geom_scatterpie(data = plot_data %>% distinct(vertex.names, .keep_all = TRUE), cols = c("RNA", "Protein", "Kinase", "Hidden"), pie_scale = .5) + 
-    geom_nodetext_repel(aes(label = vertex.names), fontface = "bold", size = 11 / ggplot2:::.pt, box.padding = unit(.35, "lines")) +
+    geom_scatterpie(data = plot_data %>% distinct(vertex.names, .keep_all = TRUE), cols = c("RNA", "Kinase", "Hidden", "Protein", "Peptide", "TF"), pie_scale = .5) + 
+    geom_nodetext_repel(aes(label = vertex.names), family = "Arial Narrow", fontface = "bold.italic", size = 9 / ggplot2:::.pt, box.padding = unit(.25, "lines")) +
     coord_equal() +
     theme_blank() +
     theme(legend.position = "none")
@@ -50,7 +49,7 @@ generate_subnetwork <- function(kinograte_res, genes) {
 ```
 
 ```{r}
-genes_input <- gsea_pathways[831, ]$leadingEdge %>% unlist()
+genes_input <- names(combined) %>% sample(100)
 
 plot <- generate_subnetwork(kinograte_res, genes_input)
 
