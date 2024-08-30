@@ -5,7 +5,7 @@ project:
        - learn.qmd
        - data.qmd
        - pathways.qmd
-
+       - networks.qmd
 website:
   title: "MultiomicMenu"
   navbar:
