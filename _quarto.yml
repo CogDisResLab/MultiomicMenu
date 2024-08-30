@@ -1,0 +1,26 @@
+project:
+  type: website
+  render:
+       - index.qmd
+       - learn.qmd
+       - data.qmd
+       - pathways.qmd
+
+website:
+  title: "MultiomicMenu"
+  navbar:
+    left:
+      - href: index.qmd
+        text: Home
+      - learn.qmd
+      - data.qmd
+      - pathways.qmd
+
+format:
+  html:
+    theme: cosmo
+    css: styles.css
+    toc: true
+
+editor: source
+

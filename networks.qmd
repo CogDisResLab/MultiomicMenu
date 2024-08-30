@@ -1,0 +1,58 @@
+---
+title: "Networks"
+author: "Cognitive Disorders Reserach Laboratory"
+date: last-modified
+date-format: "[Last Updated on] MMMM DD, YYYY"
+---
+
+These are your pathways.
+
+```{r}
+#| label: "networks_common"
+#| include: FALSE
+source("_common.R")
+```
+
+```{r}
+#| label: "networks_computations"
+generate_subnetwork <- function(kinograte_res, genes) {
+  network <- kinograte_res$network
+  nodes <- kinograte_res$nodes
+  
+  genes <- genes[genes %in% nodes$Protein]
+  
+  subnet = induced_subgraph(network, genes) %>%
+    delete_vertices(V(.)[degree(.) == 0]) %>%
+    asNetwork()
+  
+  plot_data <- ggnetwork(subnet, layout = "fruchtermanreingold") %>%
+    inner_join(nodes, by = c("vertex.names" = "Protein")) %>%
+      mutate(RNA = as.numeric(str_detect(type.y, "RNA")),
+         Kinase = as.numeric(str_detect(type.y, "Kinase")),
+         Hidden = as.numeric(str_detect(type.y, "Hidden")),
+         Protein = as.numeric(str_detect(type.y, "Protein")),
+         Special = sample(c(TRUE, FALSE), nrow(.), replace = TRUE))
+
+  plot = plot_data %>%
+    ggplot(aes(x = x, y = y, xend = xend, yend = yend)) +
+    geom_edges(color = "grey50", curvature = 0.05) +
+    #geom_nodes(aes(color=Special), size=11)+
+    #geom_nodes(size=9, color = "white")+
+    geom_scatterpie(data = plot_data %>% distinct(vertex.names, .keep_all = TRUE), cols = c("RNA", "Protein", "Kinase", "Hidden"), pie_scale = .5) + 
+    geom_nodetext_repel(aes(label = vertex.names), fontface = "bold", size = 11 / ggplot2:::.pt, box.padding = unit(.35, "lines")) +
+    coord_equal() +
+    theme_blank() +
+    theme(legend.position = "none")
+  
+  plot
+
+}
+```
+
+```{r}
+genes_input <- gsea_pathways[831, ]$leadingEdge %>% unlist()
+
+plot <- generate_subnetwork(kinograte_res, genes_input)
+
+plot
+```

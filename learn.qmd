@@ -1,0 +1,64 @@
+---
+title: "Learn"
+author: "Cognitive Disorders Reserach Laboratory"
+date: last-modified
+date-format: "[Last Updated on] MMMM DD, YYYY"
+---
+
+```{r}
+#| label: "learn_common"
+#| include: FALSE
+source("_common.R")
+```
+
+# Introduction
+
+Multiomics integration refers to the integration of multiple types of biological data sets that are generated from various “omics” technologies. These data sets provide complementary information about biological systems at different levels of molecular complexity, and the integration of these data sets can provide a more comprehensive understanding of complex biological processes.
+
+There are several types of omics data that can be integrated, including but not limited to:
+•	Transcriptomics: the study of an organism’s RNA transcripts
+•	Proteomics: the study of an organism’s proteins
+•	Kinomics: the study of organism’s kinase activity
+
+# Why Multiomics Integration?
+
+As a principal investigator, you may be interested in studying complex biological processes such as disease mechanisms, drug targets, or the development of new therapeutic approaches. By integrating multi-omics data, you can gain a more comprehensive understanding of the underlying biological mechanisms and identify potential biomarkers or therapeutic targets that may have been missed by analyzing each data set individually.
+
+For example, in cancer research, transcriptomic data can be used to identify genes that are differentially expressed between tumor and normal tissues. Kinomic data can reveal changes in kinase activity that are associated with the disease state, specific tumor subtypes, or treatment response. By integrating these two types of data, we can identify key signaling pathways that are dysregulated in cancer cells and develop targeted therapies to modulate these pathways.
+
+Overall, multi-omics integration can help you generate new hypotheses, refine existing hypotheses, and ultimately, design more effective experiments and therapeutic interventions.
+
+# Methods for Multiomics Integration
+
+Overall, the choice of method depends on the research question, the data types, and the available resources.
+•	Network-based approaches: This involves constructing biological networks based on the relationships between genes, proteins, metabolites, etc., and then integrating omics data sets onto these networks.
+•	Pathway-based approaches: This involves mapping omics data onto biological pathways to identify key regulatory nodes and pathways that are dysregulated in disease states.
+•	Correlation-based approaches: This involves calculating the correlation between omics data sets and identifying common patterns across different omics layers.
+•	Machine learning-based approaches: This involves using machine learning algorithms to build models that can predict biological outcomes based on integrated omics data.
+
+# Network-Based Multiomics Integration Theory
+
+Network-based multiomics integration applies the Prize-Collecting Steiner Tree (PCST) problem, an optimization problem that involves finding a minimum-cost subgraph that connects a subset of nodes in a graph called terminals while also collecting rewards associated with the nodes. In the context of biological networks, the PCST problem can be used to identify the most significant subnetworks within them.
+
+PPI networks are graphs where nodes represent proteins, and edges represent interactions between proteins. The terminals in the PCST problem represent a set of proteins with known biological functions, such as disease-related proteins or drug targets. The rewards associated with each node may represent the proteins’ functional importance or their relevance to a specific biological process or disease.
+
+Solving the PCST problem on a PPI network involves selecting a subgraph that connects all the terminals while minimizing the total cost of the subgraph and maximizing the sum of the rewards of the selected nodes. This subgraph represents the most significant subnetwork that connects the set of proteins with known biological functions while collecting rewards associated with the nodes.
+
+A hidden node refers to a terminal node that is not included in the subnetwork identified by the PCST algorithm, but is still important because it has connections to nodes that are included in the subnetwork. Hidden nodes can represent important biological entities that are not immediately obvious from the subnetwork identified by the PCST algorithm. By understanding the role of hidden nodes in the context of the larger network, researchers can gain insights into what might otherwise be overlooked.
+
+By solving the PCST problem on a PPI network, we can identify potential drug targets or biomarkers by highlighting subnetworks critical to a specific biological function or disease pathway. This information can be used to develop new therapies and treatments for a range of diseases. Overall, the PCST problem is a powerful tool for analyzing PPI networks and can provide insights into cellular functions and disease mechanisms, making it an important area of research in translational medicine.
+
+# Network-Based Multiomics Integration Visualization
+
+Important subnetworks in protein-protein interaction networks identified by network-based multiomics integration approaches can be visualized to gain insights into the underlying biological mechanisms and relationships between the proteins. Network visualizations are important because they provide an intuitive way to understand the relationships between biological entities, helping to identify potential drug targets, biomarkers, and disease pathways. They enable us to easily understand complex systems, explore large datasets, communicate complex ideas, and facilitate collaboration among researchers.
+
+# Functional Analysis of Multiomics Integration Networks
+
+Functional enrichment analysis is a computational approach used in genomics and other biological sciences to identify the biological functions and pathways that are significantly over-represented in a set of genes or other biological entities.
+The process typically involves comparing a list of genes or proteins of interest to a reference list or database, such as the Gene Ontology database, to identify functional categories that are overrepresented in the gene list. The statistical significance of the enrichment is usually determined by comparing the observed number of genes in a particular functional category to the expected number based on chance.
+
+Functional enrichment analysis is important because it can help researchers gain insights into the biological processes and pathways that are associated with a particular set of genes or proteins.
+
+
+Functional enrichment analysis of the whole integration network can also be performed using Gene-set Enrichment Analysis (GSEA) to gain insights globally perturbed processes underlying all observed biological interactions.
+Gene-set enrichment analysis (GSEA) can preferred over overrepresentation analysis (ORA) because it considers the entire dataset, making it less biased towards known sets of genes, and is more sensitive, able to detect subtle but coordinated changes in gene expression across multiple genes. This is particularly important in complex diseases or biological processes where multiple pathways may be involved.

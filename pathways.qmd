@@ -1,0 +1,112 @@
+---
+title: "Pathways"
+author: "Cognitive Disorders Reserach Laboratory"
+date: last-modified
+date-format: "[Last Updated on] MMMM DD, YYYY"
+---
+
+These are your pathways.
+
+```{r}
+#| label: "pathways_common"
+#| include: FALSE
+source("_common.R")
+```
+
+```{r}
+#| label: "pathways_computations"
+
+centrality <-
+  igraph::eigen_centrality(kinograte_res$network, directed = F)$vector %>%
+  as_tibble(rownames = "Symbol") %>%
+  arrange(desc(value)) # %>%
+#   mutate(value = rank(value) / nrow(.)) ### TODO: Check if this is needed
+
+combined <- centrality %>%
+  left_join(combined_df %>% select(Symbol = name, prize)) %>%
+  rowwise() %>%
+  mutate(rank = mean(c(value, prize), na.rm = T)) %>%
+  ungroup() %>%
+  select(-value,-prize) %>%
+  arrange(desc(rank)) %>%
+  deframe()
+
+### GSEA
+if(rlang::has_name(data, "rna")) {
+  # We can only do GSEA if we have RNA data
+  
+  gmt_pathways <- fgsea::gmtPathways(params$gmt)
+  
+  gsea_pathways <-
+    fgsea::fgsea(gmt_pathways, combined, scoreType = "pos") %>%
+    select(pathway, NES, size, padj, leadingEdge) %>%
+    separate(pathway,
+             sep = "%",
+             into = c("pathway", "pathway2", "pathway3")) %>%
+    mutate(pathway = stringr::str_to_title(pathway)) %>%
+    mutate(pathway = paste0(pathway, " ", pathway3)) %>%
+    select(-pathway2,-pathway3) %>%
+    arrange(desc(NES)) %>%
+    filter(padj <= 0.05) %>%
+    mutate(GOID = str_extract(pathway, "GO:\\d+")) %>%
+    relocate(GOID) %>%
+    write_csv(here::here("data/output/gsea_pathways.csv"))
+}
+
+### ENRICHR
+do_enrichr <- function(X) {
+  dbs = c("GO_Biological_Process_2023",
+          "GO_Molecular_Function_2023",
+          "GO_Cellular_Component_2023")
+  
+  columns = c("Biological_Process",
+              "Molecular_Function",
+              "Cellular_Component")
+  
+  quiet(X %>%
+          enrichr(databases = dbs) %>%
+          map2(columns, ~ mutate(.x, namespace = .y)) %>%
+          bind_rows %>%
+          filter(Adjusted.P.value <= .05) %>%
+          extract(Term, "GOID", "(GO:\\d+)", remove = FALSE) %>%
+          extract(Term, "Term", "(.*?)\\(GO:\\d+\\)"))
+}
+
+if(rlang::has_name(data, "rna")) { #If we do GSEA on the whole network, do Enrichr on the top 10% of the network, else do Enrichr on the whole network
+  topcombined <- combined[combined >= quantile(combined, 0.9)]
+} else {
+  topcombined <- combined[combined >= 0]
+}
+
+enrichr_pathways <- do_enrichr(names(topcombined)) %>%
+  write_csv(here::here("data/output/enrichr_pathways.csv"))
+```
+
+```{r}
+#| label: "pathways_paver"
+paver_input <- enrichr_pathways %>% 
+  select(GOID, Enrichr = Combined.Score) %>% 
+  mutate(Enrichr = log10(Enrichr)) %>%
+  {if(rlang::has_name(data, "rna")) full_join(., gsea_pathways %>% select(GOID, GSEA = NES)) else .} # If we have GSEA results, join them with Enrichr results
+
+embeddings = readRDS(url("https://github.com/willgryan/PAVER_embeddings/raw/main/2023-03-06/embeddings_2023-03-06.RDS"))
+term2name = readRDS(url("https://github.com/willgryan/PAVER_embeddings/raw/main/2023-03-06/term2name_2023-03-06.RDS"))
+
+PAVER_result = prepare_data(paver_input, embeddings, term2name)
+
+minClusterSize = 3 
+maxCoreScatter = 0.45
+minGap = (1 - maxCoreScatter) * 3/4
+
+PAVER_result = generate_themes(PAVER_result, 
+                               maxCoreScatter=maxCoreScatter,
+                               minGap=minGap,
+                               minClusterSize=minClusterSize)
+
+paver_clustering <- PAVER_export(PAVER_result)
+```
+
+```{r}
+#| label: "pathways_paver_heatmap"
+PAVER_hunter_plot(PAVER_result)
+```

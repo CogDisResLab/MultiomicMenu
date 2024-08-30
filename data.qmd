@@ -1,0 +1,323 @@
+---
+title: "MultiomicMenu"
+author: "Cognitive Disorders Reserach Laboratory"
+date: last-modified
+date-format: "[Last Updated on] MMMM DD, YYYY"
+---
+
+This is your data.
+
+```{r}
+#| label: "data_common"
+#| include: FALSE
+source("_common.R")
+```
+
+```{r}
+#| label: "data_computations"
+
+# Functions to process tables for different omic types
+format_rna <- function(df, useFDR=TRUE) {
+  df <- df %>%
+    select(1:3) %>%
+    rename(Symbol = 1, log2FoldChange = 2, pvalue = 3) %>%
+    filter(complete.cases(.)) %>%
+    mutate(Symbol = str_trim(Symbol)) %>%
+    distinct(Symbol, .keep_all = TRUE) %>%
+    percentile_rank(Symbol, log2FoldChange)
+
+  if (useFDR) {
+    df <- df %>%
+      mutate(padj = p.adjust(pvalue, method = "fdr")) %>%
+      filter(padj <= 0.05)
+  } else {
+    df <- df %>%
+      filter(pvalue <= 0.05)
+  }
+
+  df %>% top_hits(prec_cutoff = -0.1, omic_type = "RNA")
+}
+
+
+format_protein <- function(df) {
+}
+
+format_kinase <- function(df) {
+  sig_kinases <- df |>
+    dplyr::filter(Method == "KRSA", Qrt >= 4) |>
+    dplyr::pull(hgnc_symbol) |>
+    unique()
+  
+  df %>%
+    dplyr::filter(hgnc_symbol %in% sig_kinases) %>%
+    select(hgnc_symbol, Rank) %>%
+    rename_with(~ c("Symbol", "Z score")) %>%
+    group_by(Symbol) %>%
+    summarise(`Z score` = mean(`Z score`, na.rm = TRUE)) %>%
+    ungroup() %>%
+    distinct(Symbol, .keep_all = TRUE) %>%
+    percentile_rank(`Symbol`, `Z score`, desc = TRUE) %>%
+    top_hits(prec_cutoff = -0.1, omic_type = "Kinase")
+}
+
+format_krsa_peptides <- function(df) {
+  mapping <- read_csv(here::here("data/assets/mapping_patch.csv")) %>% 
+    rename(ID = Peptide) %>%
+    bind_rows(stk_pamchip_87102_mapping, ptk_pamchip_86402_mapping)
+  
+  df %>%
+    select(Peptide, totalMeanLFC) %>%
+    distinct(Peptide, .keep_all = TRUE) %>%
+    filter(abs(totalMeanLFC) >= log2(1.15)) %>%
+    dplyr::left_join(mapping, by = c("Peptide" = "ID")) %>%
+    group_by(HGNC) %>%
+    summarise(totalMeanLFC = mean(totalMeanLFC, na.rm = TRUE)) %>%
+    ungroup() %>%
+    distinct(HGNC, .keep_all = TRUE) %>%
+    percentile_rank(`HGNC`, `totalMeanLFC`) %>%
+    top_hits(prec_cutoff = -0.1, omic_type = "Peptide")
+}
+
+# Apply a process function to a dataframe based on its name
+process_data <- function(df, name) {
+  switch(
+    name,
+    "rna" = df %>% format_rna(),
+    "protein" = df %>% format_protein(),
+    "kinase_stk" = df %>% format_kinase(),
+    "kinase_ptk" = df %>% format_kinase(),
+    "peptide" = df %>% format_krsa_peptides(),
+    df
+  )
+}
+
+fix_hgnc <- function(X) {
+  if (!exists("HGNChelper_CurrentHumanMap")) {
+    HGNChelper_CurrentHumanMap <<- quiet(HGNChelper::getCurrentHumanMap()) #Global voodoo
+  }
+  
+  HGNChelper::checkGeneSymbols(X %>% pull(1), map = HGNChelper_CurrentHumanMap) %>%
+    select(Symbol = 1, Suggested.Symbol) %>%
+    mutate(
+      Suggested.Symbol = if_else(
+        Suggested.Symbol == "" |
+          is.na(Suggested.Symbol),
+        Symbol,
+        Suggested.Symbol
+      ),
+      Suggested.Symbol = if_else(
+        str_detect(Suggested.Symbol, ".+?(?= ///)"),
+        str_extract(Suggested.Symbol, ".+?(?= ///)"),
+        Suggested.Symbol
+      )
+    ) %>%
+    inner_join(X %>% rename(Symbol = 1), by = "Symbol") %>%
+    select(-Symbol, Symbol = Suggested.Symbol) %>%
+    rename(name = 1)
+}
+
+generate_string_ppi <- function(species) {
+  species_id = c(human = "9606", mouse = "10090", rat = "10116")[species]
+  
+  links = str_glue("https://stringdb-downloads.org/download/protein.links.v12.0/{species_id}.protein.links.v12.0.txt.gz")
+  info = str_glue("https://stringdb-downloads.org/download/protein.info.v12.0/{species_id}.protein.info.v12.0.txt.gz")
+  
+  names <- read_tsv(info) %>%
+    select(1:2)
+  
+  interactions <- read_delim(links, delim = " ") %>%
+    mutate(combined_score = combined_score / 1000) %>%
+    left_join(names, by = c("protein1" = "#string_protein_id")) %>%
+    rename(protein1_symbol = preferred_name) %>%
+    left_join(names, by = c("protein2" = "#string_protein_id")) %>%
+    rename(protein2_symbol = preferred_name) %>% 
+    select(-protein1, -protein2) %>%
+    filter(combined_score >= .5) %>%
+    mutate(cost = pmax(0.01, 1-combined_score)) %>%
+    select(-combined_score) %>%
+    rename(from = 1, to = 2)
+}
+
+generate_phuEGO_ppi <- function(species) {
+  if (!exists("hgnc_set")) {
+    hgnc_set <<- read_tsv("https://ftp.ebi.ac.uk/pub/databases/genenames/new/tsv/hgnc_complete_set.txt")  #Global voodoo
+  }
+  
+  uniprot_to_hgnc <- hgnc_set %>%
+    select(uniprot_ids, symbol) %>%
+    drop_na() %>%
+    distinct(uniprot_ids, .keep_all = TRUE)
+  
+  raw <- readxl::read_xlsx(here::here("data/assets/mmc4.xlsx"), skip = 1)
+  
+  interactions <- raw %>%
+    select(Protein1 = NodeA, Protein2 = NodeB, `Combined score` = simGIC) %>%
+    rename(from = Protein1, to = Protein2, cost = `Combined score`) %>%
+    left_join(uniprot_to_hgnc, by = c("from" = "uniprot_ids")) %>%
+    rename(from2 = symbol) %>%
+    left_join(uniprot_to_hgnc, by = c("to" = "uniprot_ids")) %>%
+    rename(to2 = symbol) %>%
+    select(-from, -to) %>%
+    rename(from = from2, to = to2) %>%
+    relocate(cost, .after = to) %>%
+    mutate(cost = as.numeric(cost)) %>%
+    drop_na() %>%
+    mutate(cost = 0.5 + (cost - min(cost)) * (1 - 0.5) / (max(cost) - min(cost))) %>%
+    mutate(cost = pmax(0.01, 1-cost)) %>%
+    group_by(from, to) %>%
+    summarise(cost = mean(cost)) %>%
+    ungroup()
+  
+  if(species != "human") {
+    interactions <- interactions %>% 
+      inner_join(babelgene::orthologs(.$from, species = params$species) %>% select(human_symbol, symbol), by = c("from" = "human_symbol")) %>%
+      select(-from, from = symbol) %>%
+      inner_join(babelgene::orthologs(.$to, species = params$species) %>% select(human_symbol, symbol), by = c("to" = "human_symbol")) %>%
+      select(-to, to = symbol) %>%
+      relocate(cost, .after = to)
+  }
+  
+  interactions
+}
+
+#Load data
+data <- params$data %>%
+  keep( ~ file.exists(here(.))) %>%
+  map( ~ read_csv(., name_repair = "unique_quiet")) %>%
+  imap(process_data)
+
+#Fix HGNC symbols in all the data if input is human
+if (params$species == "human") {
+  data <- data %>%
+    map(fix_hgnc)
+} 
+
+#Fix HGNC symbols for peptides, if we don't have human data but we do have peptide data, which will later get converted to species-specific orthologs
+if (params$species != "human" & !is.null(data$peptide)) {
+  data$peptide <- fix_hgnc(data$peptide)
+}
+
+#Combine kinase data from stk & ptk
+data$kinase <- base::rbind(data$kinase_stk, data$kinase_ptk)
+
+data <- data %>%
+  discard_at(c("kinase_stk", "kinase_ptk"))
+
+#Fix HGNC symbols for kinases, if we don't have human data but we do have kinase data, which will later get converted to species-specific orthologs
+if (params$species != "human" & !is.null(data$kinase)) {
+  data$kinase <- fix_hgnc(data$kinase)
+}
+
+#Get kinase ortholog symbols if non-kinase input is not human and kinase data was present, i.e., if we have kinase data and the RNA input is not human, we need to get the species-specific orthologs of the kinases.
+if (params$species != "human" & !is.null(data$kinase)) {
+  data$kinase <- data$kinase %>%
+    inner_join(
+      babelgene::orthologs(.$name, species = params$species),
+      by = c("name" = "human_symbol")
+    ) %>%
+    select(name = symbol, prize, type)
+}
+
+#Get peptide ortholog symbols if non-kinase input is not human and peptide data was present, i.e., if we have kinase + peptide data and the RNA input is not human, we need to get the species-specific orthologs of the peptides now too.
+if (params$species != "human" & !is.null(data$peptide)) {
+  data$peptide <- data$peptide %>%
+    inner_join(
+      babelgene::orthologs(.$name, species = params$species),
+      by = c("name" = "human_symbol")
+    ) %>%
+    select(name = symbol, prize, type)
+}
+
+get_chea3_enrichment <- function(genes, query_name = "myQuery", url = "https://maayanlab.cloud/chea3/api/enrich/") {
+  # Prepare the payload
+  payload <- list(query_name = query_name, gene_set = genes)
+  
+  # POST request to ChEA3 server
+  response <- POST(url = url, body = payload, encode = "json")
+  
+  # Extract and parse the JSON response
+  json <- content(response, "text")
+  results <- fromJSON(json)
+  
+  results <- results %>%
+    discard_at(c("Integrated--meanRank", "Integrated--topRank")) %>%
+    bind_rows(.id="Method") %>%
+    mutate(Rank = as.numeric(Rank),
+           FDR = as.numeric(FDR)) %>%
+    filter(FDR < 0.05) %>%
+    group_by(TF) %>%
+    summarise(Rank = mean(Rank, na.rm = TRUE)) %>%
+    ungroup()
+  
+  # Return the results as a list of dataframes
+  return(results)
+}
+
+#Predict transcription factors involved in all the data so far
+chea3_results <- get_chea3_enrichment(data %>% map(pull, name) %>% unlist) %>%
+  percentile_rank(`TF`, `Rank`, desc = TRUE) %>%
+  top_hits(prec_cutoff = -0.1, omic_type = "TF")
+
+# CHEA3 always returns human symbols, lets convert back.
+if(params$species != "human") {
+  chea3_results <- chea3_results %>%
+    inner_join(
+      babelgene::orthologs(.$name, species = params$species),
+      by = c("name" = "human_symbol")
+    ) %>%
+    select(name = symbol, prize, type)
+}
+
+#Here we make scores additive and concatenate the types with a | delimiter for plotting later.
+combine_scores_patch <- function(df_rna = NULL, df_prot = NULL, df_kin = NULL, tf_kin = NULL, df_pep = NULL) {
+  
+  base::rbind(df_rna, df_prot, df_kin, tf_kin, df_pep) %>% 
+    dplyr::group_by(name) %>%
+    dplyr::summarise(prize = sum(prize, na.rm = TRUE),
+                     type = paste(unique(type), collapse = "|")) %>%
+    dplyr::ungroup()
+
+}
+
+combined_df <- combine_scores_patch(df_rna = data$rna,
+                              df_prot = data$protein,
+                              df_kin = data$kinase,
+                              df_pep = data$peptide,
+                              tf_kin = chea3_results)
+
+string_ppi <- generate_string_ppi(params$species)
+
+phuego_ppi <- generate_phuEGO_ppi(params$species)
+
+ppi <- bind_rows(string_ppi, phuego_ppi) %>%
+    group_by(from, to) %>%
+    summarise(cost = mean(cost)) %>%
+    ungroup()
+
+kinograte_res <- quiet(kinograte(combined_df# %>% slice_sample(n=1000)
+                                 , ppi_network = ppi, cluster = F, seed = 123, mu=1e-4))
+```
+
+```{r}
+#| label: "data_visualizations"
+make_table(combined_df)
+
+score_plot <- function(df, prec_cutoff = 0.8, title = "Prize Plot", subtitle = "", interactive = T) {
+  
+  df %>% 
+    dplyr::mutate_if(is.numeric, round, 3) -> df
+  
+  if(interactive) {
+    df %>% 
+      echarts4r::e_charts(name) %>% 
+      echarts4r::e_step(score, legend = F) %>% 
+      echarts4r::e_visual_map(score) %>% 
+      echarts4r::e_x_axis(axisLabel =  list(show  = F)) %>% 
+      echarts4r::e_y_axis(name = "Normalized Prize", nameLocation = "center", nameGap = 40, nameTextStyle =  list()) %>% 
+      #echarts4r::e_mark_line(data = list(yAxis = prec_cutoff), title = "Score Cutoff", symbolSize = F, silent = T) %>% 
+      echarts4r::e_tooltip(trigger = "axis") %>% 
+      echarts4r::e_title(title, subtext = subtitle)
+  }
+}
+score_plot(combined_df %>% rename(score = prize) %>% arrange(desc(score)), interactive = TRUE)
+```

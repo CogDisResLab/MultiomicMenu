@@ -1,0 +1,27 @@
+---
+title: "MultiomicMenu Report"
+subtitle: "`r params$subtitle`"
+author: "Cognitive Disorders Reserach Laboratory (CDRL)"
+date: last-modified
+date-format: "[Last Updated on] MMMM DD, YYYY"
+params:
+  subtitle: "For Dr. XYZ"
+  species: rat # one of: [human, mouse, rat]
+  gmt: "https://download.baderlab.org/EM_Genesets/current_release/Rat/symbol/GO/Rat_GOALL_with_GO_iea_July_01_2024_symbol.gmt"
+  data:
+    value:
+      rna: "data/rna.csv"
+    #  protein: "data/protein.csv"
+      kinase_stk: "data/kinase.csv"
+    #  kinase_ptk: "data/kinase.csv"
+      peptide: "data/peptides.csv"
+---
+
+This is a MultomicMenu report.
+
+```{r}
+#| label: "index_common"
+#| include: FALSE
+if(file.exists(here::here("data/env.RData"))) file.remove(here::here("data/env.RData")) # Delete old environment on run
+source("_common.R")
+```

@@ -1,0 +1,13 @@
+.Rproj.user
+.Rhistory
+.Rdata
+.httr-oauth
+.DS_Store
+_bookdown_files
+_book
+packages.bib
+.quarto
+_site
+.Rapp
+.Rapp.history
+/.quarto/
