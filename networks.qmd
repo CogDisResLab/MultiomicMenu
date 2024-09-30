@@ -46,12 +46,48 @@ generate_subnetwork <- function(kinograte_res, genes) {
   plot
 
 }
+
+generate_seeded_network <- function(kinograte_res, gene, degree=1) {
+  network <- kinograte_res$network
+  nodes <- kinograte_res$nodes
+
+  subnet <- make_ego_graph(network, gene, order = degree)[[1]] %>%
+    delete_vertices(V(.)[degree(.) == 0]) %>%
+    asNetwork()
+  
+  plot_data <- ggnetwork(subnet, layout = "fruchtermanreingold") %>%
+    inner_join(nodes, by = c("vertex.names" = "Protein")) %>%
+      mutate(RNA = as.numeric(str_detect(type.y, "RNA")),
+         Kinase = as.numeric(str_detect(type.y, "Kinase")),
+         Hidden = as.numeric(str_detect(type.y, "Hidden")),
+         Protein = as.numeric(str_detect(type.y, "Protein")),
+         Peptide = as.numeric(str_detect(type.y, "Peptide")),
+         TF = as.numeric(str_detect(type.y, "TF")))
+
+  plot = plot_data %>%
+    ggplot(aes(x = x, y = y, xend = xend, yend = yend)) +
+    geom_edges(color = "grey50", curvature = 0.05) +
+    geom_scatterpie(data = plot_data %>% distinct(vertex.names, .keep_all = TRUE), cols = c("RNA", "Kinase", "Hidden", "Protein", "Peptide", "TF"), pie_scale = .5) + 
+    geom_nodetext_repel(aes(label = vertex.names), family = "Arial Narrow", fontface = "bold.italic", size = 9 / ggplot2:::.pt, box.padding = unit(.25, "lines")) +
+    coord_equal() +
+    theme_blank() +
+    theme(legend.position = "none")
+  
+  plot
+}
+
 ```
 
 ```{r}
 genes_input <- names(combined) %>% sample(100)
 
 plot <- generate_subnetwork(kinograte_res, genes_input)
+
+plot
+
+gene_input <- names(combined) %>% sample(1)
+
+plot <- generate_seeded_network(kinograte_res, gene_input, 1)
 
 plot
 ```
