@@ -268,6 +268,34 @@ if(params$species != "human") {
     select(name = symbol, prize, type)
 }
 
+fisher_p_combine <- function(pvalues) {
+  if (!is.numeric(pvalues)) {
+    warning("Input is not a numeric vector. Returning NA.")
+    return(NA)
+  }
+  
+  pvalues <- pvalues[!is.na(pvalues)]
+  if (length(pvalues) == 0) {
+    warning("No valid p-values found after removing NA. Returning NA.")
+    return(NA)
+  }
+  
+  if (any(pvalues < 0 | pvalues > 1)) {
+    warning("P-values must be between 0 and 1. Returning NA.")
+    return(NA)
+  }
+  
+  pvalues[pvalues == 0] <- .Machine$double.xmin
+  
+  chisq_stat <- -2 * sum(log(pvalues))
+  
+  df <- 2 * length(pvalues)
+  
+  combined_p <- pchisq(chisq_stat, df = df, lower.tail = FALSE)
+  
+  return(combined_p)
+}
+
 #Here we make scores additive and concatenate the types with a | delimiter for plotting later.
 combine_scores_patch <- function(df_rna = NULL, df_prot = NULL, df_kin = NULL, tf_kin = NULL, df_pep = NULL) {
   
@@ -294,8 +322,7 @@ ppi <- bind_rows(string_ppi, phuego_ppi) %>%
     summarise(cost = mean(cost)) %>%
     ungroup()
 
-kinograte_res <- quiet(kinograte(combined_df #%>% slice_sample(n=250) Remove for testing small integrations
-                                 , ppi_network = ppi, cluster = F, seed = 123, mu=1e-4))
+kinograte_res <- quiet(kinograte(combined_df, ppi_network = ppi, cluster = F, seed = 123, mu=1e-4))
 ```
 
 ```{r}
