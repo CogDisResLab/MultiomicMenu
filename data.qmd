@@ -44,7 +44,7 @@ format_protein <- function(df) {
 
 format_kinase <- function(df) {
   sig_kinases <- df |>
-    dplyr::filter(Method == "KRSA", Qrt >= 4) |>
+    dplyr::filter(Method == "KEA3", Qrt >= 4) |>
     dplyr::pull(hgnc_symbol) |>
     unique()
   
@@ -301,7 +301,8 @@ combine_scores_patch <- function(df_rna = NULL, df_prot = NULL, df_kin = NULL, t
   
   base::rbind(df_rna, df_prot, df_kin, tf_kin, df_pep) %>% 
     dplyr::group_by(name) %>%
-    dplyr::summarise(prize = sum(prize, na.rm = TRUE),
+    dplyr::mutate(inv_prize=1-prize) %>%
+    dplyr::summarise(prize = fisher_p_combine(inv_prize),
                      type = paste(unique(type), collapse = "|")) %>%
     dplyr::ungroup()
 
