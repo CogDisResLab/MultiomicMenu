@@ -140,7 +140,7 @@ generate_string_ppi <- function(species) {
 
 generate_phuEGO_ppi <- function(species) {
   if (!exists("hgnc_set")) {
-    hgnc_set <<- read_tsv("https://ftp.ebi.ac.uk/pub/databases/genenames/new/tsv/hgnc_complete_set.txt")  #Global voodoo
+    hgnc_set <<- read_tsv("hgnc_complete_set.txt")
   }
   
   uniprot_to_hgnc <- hgnc_set %>%
