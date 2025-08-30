@@ -346,5 +346,5 @@ score_plot <- function(df, title = "Prize Plot", subtitle = "", interactive = T)
       echarts4r::e_title(title, subtext = subtitle)
   }
 }
-score_plot(combined_df %>% rename(score = prize) %>% arrange(desc(score)), interactive = TRUE)
+score_plot(combined_df %>% rename(score = prize) %>% arrange(score), interactive = TRUE)
 ```
