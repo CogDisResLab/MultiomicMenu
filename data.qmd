@@ -311,7 +311,7 @@ combine_scores_patch <- function(df_rna = NULL, df_prot = NULL, df_kin = NULL, t
 combined_df <- combine_scores_patch(df_rna = data$rna,
                               df_prot = data$protein,
                               df_kin = data$kinase,
-                              df_pep = data$peptide,
+                              # df_pep = data$peptide,
                               tf_kin = chea3_results)
 
 string_ppi <- generate_string_ppi(params$species)
