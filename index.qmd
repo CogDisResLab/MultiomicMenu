@@ -12,9 +12,9 @@ params:
     value:
     #  rna: "data/rna.csv"
     #  protein: "data/protein.csv"
-      kinase_stk: "data/creedenzymatic.csv"
+      kinase_stk: "data/kinase.csv"
     #  kinase_ptk: "data/kinase.csv"
-      peptide: "data/dpp_file.csv"
+      peptide: "data/peptides.csv"
 ---
 
 This is a MultomicMenu report.
