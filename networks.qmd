@@ -79,7 +79,7 @@ generate_seeded_network <- function(kinograte_res, gene, degree=1) {
 ```
 
 ```{r}
-genes_input <- names(combined) %>% sample(100)
+genes_input <- combined %>% head(100) %>% names()
 
 plot <- generate_subnetwork(kinograte_res, genes_input)
 

@@ -6,15 +6,15 @@ date: last-modified
 date-format: "[Last Updated on] MMMM DD, YYYY"
 params:
   subtitle: "For Dr. XYZ"
-  species: rat # one of: [human, mouse, rat]
-  gmt: "https://download.baderlab.org/EM_Genesets/current_release/Rat/symbol/GO/Rat_GOALL_with_GO_iea_July_01_2024_symbol.gmt"
+  species: human # one of: [human, mouse, rat]
+  gmt: "https://download.baderlab.org/EM_Genesets/current_release/Human/symbol/Human_GO_AllPathways_noPFOCR_with_GO_iea_February_03_2026_symbol.gmt"
   data:
     value:
     #  rna: "data/rna.csv"
     #  protein: "data/protein.csv"
-      kinase_stk: "data/creedenzymatic.csv"
+      kinase_stk: "data/kinase.csv"
     #  kinase_ptk: "data/kinase.csv"
-      peptide: "data/dpp_file.csv"
+      peptide: "data/peptides.csv"
 ---
 
 This is a MultomicMenu report.
