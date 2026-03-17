@@ -10,11 +10,11 @@ params:
   gmt: "https://download.baderlab.org/EM_Genesets/current_release/Human/symbol/Human_GO_AllPathways_noPFOCR_with_GO_iea_February_03_2026_symbol.gmt"
   data:
     value:
-    #  rna: "data/rna.csv"
+      rna: "data/ttable_24v0.csv"
     #  protein: "data/protein.csv"
-      kinase_stk: "data/kinase.csv"
-    #  kinase_ptk: "data/kinase.csv"
-      peptide: "data/peptides.csv"
+      kinase_stk: "data/kinome_24_0_STK_creedenzymatic.csv"
+      kinase_ptk: "data/kinome_24_0_PTK_creedenzymatic.csv"
+    #  peptide: "data/peptides.csv"
 ---
 
 This is a MultomicMenu report.

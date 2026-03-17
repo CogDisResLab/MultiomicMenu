@@ -15,6 +15,7 @@ source("_common.R")
 
 ```{r}
 #| label: "networks_computations"
+saveRDS(kinograte_res, 'mdma_24_0_kinograte_res.RDS')
 generate_subnetwork <- function(kinograte_res, genes) {
   network <- kinograte_res$network
   nodes <- kinograte_res$nodes

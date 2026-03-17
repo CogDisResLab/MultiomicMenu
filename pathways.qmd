@@ -35,7 +35,7 @@ combined <- centrality %>%
 if(rlang::has_name(data, "rna")) {
   # We can only do GSEA if we have RNA data
   
-  gmt_pathways <- fgsea::gmtPathways(params$gmt)
+  gmt_pathways <- fgsea::gmtPathways("data/Human_GOBP_AllPathways_noPFOCR_with_GO_iea_March_02_2026_symbol.gmt")
   
   gsea_pathways <-
     fgsea::fgsea(gmt_pathways, combined, scoreType = "pos") %>%
