@@ -5,23 +5,43 @@ author: "Cognitive Disorders Reserach Laboratory (CDRL)"
 date: last-modified
 date-format: "[Last Updated on] MMMM DD, YYYY"
 params:
-  subtitle: "For Dr. XYZ"
-  species: human # one of: [human, mouse, rat]
-  gmt: "https://download.baderlab.org/EM_Genesets/current_release/Human/symbol/Human_GO_AllPathways_noPFOCR_with_GO_iea_February_03_2026_symbol.gmt"
+  subtitle: "Channelopathy 1"
+  species: mouse # one of: [human, mouse, rat]
+  include_string_context: false # contextual protein nodes when only using phosphorylation and kinase data, false is the only supported behavior
+  gmt: "https://download.baderlab.org/EM_Genesets/current_release/Mouse/symbol/Mouse_GO_AllPathways_noPFOCR_with_GO_iea_March_02_2026_symbol.gmt"
   data:
     value:
-      rna: "data/ttable_24v0.csv"
-    #  protein: "data/protein.csv"
-      kinase_stk: "data/kinome_24_0_STK_creedenzymatic.csv"
-      kinase_ptk: "data/kinome_24_0_PTK_creedenzymatic.csv"
-    #  peptide: "data/peptides.csv"
+    #  rna: "data/rna.csv"
+    #  protein: "data/protein.csv" # first 3 columns: gene symbol, log2 fold change, p-value
+      phosphosite: "data/NR1KD_phosphosite_DAA_limma_females.csv" #"data/protein.csv"
+    #  kinase_stk: "data/milan_male_creedenzymatic.csv" #"data/kinase.csv"
+    #  kinase_ptk: "data/kinase.csv"
+      #peptide: "data/dana-dpp_FEMALE.csv" #data/peptides.csv"
 ---
-
-This is a MultomicMenu report.
-
 ```{r}
 #| label: "index_common"
 #| include: FALSE
 if(file.exists(here::here("data/env.RData"))) file.remove(here::here("data/env.RData")) # Delete old environment on run
 source("_common.R")
+cache_network_resources <- TRUE
+# TRUE  = reuse locally cached STRING/OmniPath resource tables when available
+# FALSE = fetch/rebuild network resources normally
+phosphosite_level <- FALSE
+# TRUE  = individual phosphosite nodes and site-specific kinase edges
+# FALSE = collapse each protein to the site with maximum abs(logFC)
+#         and use the legacy STRING + phuEGO protein network
+filter_sign <- FALSE
+# TRUE removes only direct kinase-to-phosphosite edges whose known, non-zero
+# signed experimental effects are opposite.
 ```
+
+# For kinase activity and phosphosite integration, it is recommended to only use phosphosite_level==TRUE, as protein-level summarization may result in kinase-substrate_protein edges having illegitimate weights if a kinase phosphorylates a different site than the max(abs(logFC)) site   
+
+This is a MultomicMenu report.
+
+# Added database caching which sped up consecutive runs by 40-50% (~19 minutes down to ~11 minutes)
+# Added a phosphosite category
+# Added a boolean line for "phosphosite_level", when this variable is FALSE, the package has it's original behavior of each datatype contributing to gene-level nodes (phosphosite data are summarized by taking the max(abs(logFC)) site for each protein). When phosphosite_level=TRUE, each phosphosite gets it's own node, and kinase-site edges are included from PhosphoSitePlus and NetworKIN. 
+# Revised the package to remove edges where kinase node is oppositely regulated to the connected phosphosite if filter_sign==TRUE and phosphosite_level==TRUE
+# Added result file outputs to enable further analysis such as horizontal integration
+

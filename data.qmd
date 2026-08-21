@@ -11,11 +11,22 @@ This is your data.
 #| label: "data_common"
 #| include: FALSE
 source("_common.R")
+source("R/phosphoproteomic_modes.R")
+
+if (!exists("phosphosite_level", inherits = TRUE) ||
+    !exists("filter_sign", inherits = TRUE)) {
+  stop("Render index.qmd first so phosphosite_level and filter_sign are available.")
+}
 ```
 
 ```{r}
 #| label: "data_computations"
 
+timings <- list()
+tick <- function(step) timings[[step]] <<- Sys.time()
+tock <- function(step) {
+  timings[[step]] <<- as.numeric(difftime(Sys.time(), timings[[step]], units = "secs"))
+} #Above Added to eval runtime
 # Functions to process tables for different omic types
 format_rna <- function(df, useFDR=TRUE) {
   df <- df %>%
@@ -39,25 +50,76 @@ format_rna <- function(df, useFDR=TRUE) {
 }
 
 
-format_protein <- function(df) {
+format_protein <- function(df, useFDR = TRUE) {
+  df <- df %>%
+    select(1:3) %>%
+    rename(Symbol = 1, log2FoldChange = 2, pvalue = 3) %>%
+    filter(complete.cases(.)) %>%
+    mutate(Symbol = str_trim(Symbol)) %>%
+    distinct(Symbol, .keep_all = TRUE) %>%
+    percentile_rank(Symbol, log2FoldChange)
+
+  if (useFDR) {
+    df <- df %>%
+      mutate(padj = p.adjust(pvalue, method = "fdr")) %>%
+      filter(padj <= 0.05)
+  } else {
+    df <- df %>%
+      filter(pvalue <= 0.05)
+  }
+
+  df %>% top_hits(prec_cutoff = -0.1, omic_type = "Protein")
+}
+
+format_phosphosite <- function(df) {
+  #Takes phos Differential abundance data w a 'site_id' column as <genesymbol>_(STY)### 
+  #The selected row supplies both logFC and adjusted P value to the score.
+  select_phosphosite_rows(df, phosphosite_level = phosphosite_level) %>%
+    transmute(
+      Symbol = node,
+      log2FoldChange = site_score
+    ) %>%
+    percentile_rank(Symbol, log2FoldChange) %>%
+    top_hits(prec_cutoff = -0.1, omic_type = "Phosphosite")
 }
 
 format_kinase <- function(df) {
-  sig_kinases <- df |>
-    dplyr::filter(Method == "KEA3", Qrt >= 4) |>
-    dplyr::pull(hgnc_symbol) |>
-    unique()
-  
-  df %>%
-    dplyr::filter(hgnc_symbol %in% sig_kinases) %>%
-    select(hgnc_symbol, Rank) %>%
-    rename_with(~ c("Symbol", "Z score")) %>%
+  names(df) <- stringr::str_trim(names(df))
+  signed_effects <- extract_signed_kinase_effects(df)
+
+  if (all(c("Method", "hgnc_symbol", "Rank") %in% names(df))) {
+    kinase_scores <- df %>%
+      dplyr::filter(Method == "KEA3") %>%
+      dplyr::transmute(
+        Symbol = stringr::str_trim(as.character(hgnc_symbol)),
+        `Z score` = as.numeric(Rank)
+      )
+    rank_desc <- TRUE
+  } else if (all(c("Kinase", "effect_size", "n_peptides") %in% names(df))) {
+    kinase_scores <- df %>%
+      dplyr::transmute(
+        Symbol = stringr::str_trim(as.character(Kinase)),
+        `Z score` = as.numeric(effect_size)
+      )
+    rank_desc <- FALSE
+  } else {
+    stop(
+      "Kinase data must contain either Method/hgnc_symbol/Rank or ",
+      "Kinase/effect_size/n_peptides columns."
+    )
+  }
+
+  ranked_kinases <- kinase_scores %>%
+    dplyr::filter(!is.na(Symbol), Symbol != "", is.finite(`Z score`)) %>%
     group_by(Symbol) %>%
     summarise(`Z score` = mean(`Z score`, na.rm = TRUE)) %>%
     ungroup() %>%
     distinct(Symbol, .keep_all = TRUE) %>%
-    percentile_rank(`Symbol`, `Z score`, desc = TRUE) %>%
+    percentile_rank(`Symbol`, `Z score`, desc = rank_desc) %>%
     top_hits(prec_cutoff = -0.1, omic_type = "Kinase")
+
+  ranked_kinases %>%
+    dplyr::left_join(signed_effects, by = c("name" = "Symbol"))
 }
 
 format_krsa_peptides <- function(df) {
@@ -78,14 +140,59 @@ format_krsa_peptides <- function(df) {
     top_hits(prec_cutoff = -0.1, omic_type = "Peptide")
 }
 
+format_phosphosite_peptides <- function(df) {
+  #Takes phos Differential abundance data w a 'site_id' column as <genesymbol>_(STY)### 
+  #Doesnt use site, just genesymbol
+  df %>%
+    #tibble::rownames_to_column("site_id") %>%
+    transmute(
+      site_id = site_id,
+      totalMeanLFC = logFC
+    ) %>%
+    filter(!is.na(site_id), !is.na(totalMeanLFC)) %>%
+    distinct(site_id, .keep_all = TRUE) %>%
+    
+    filter(abs(totalMeanLFC) >= log2(1.15)) %>%
+    
+    mutate(
+      HGNC = str_extract(site_id, "^[^_]+") #%>% 
+             #toupper()
+    ) %>%
+    filter(!is.na(HGNC)) %>%
+    
+    #group_by(HGNC) %>%
+    #summarise(totalMeanLFC = max(abs(totalMeanLFC)) * sign(mean(totalMeanLFC)))
+    group_by(HGNC) %>%
+    #This takes max instead of avg logfc for all sites (latter doesn't make sense for phos data since 
+    # some sites are highly regulatory but others aren't)
+    slice_max(order_by = abs(totalMeanLFC), n = 1, with_ties = FALSE) %>%
+    ungroup() %>%
+    select(HGNC, totalMeanLFC)
+#   summarise(
+#      totalMeanLFC = mean(totalMeanLFC, na.rm = TRUE),
+#      .groups = "drop"
+#    ) %>%
+    distinct(HGNC, .keep_all = TRUE) %>%
+    
+    percentile_rank(HGNC, totalMeanLFC) %>%
+    #they used this for other omic layers idk what it is
+    top_hits(
+      prec_cutoff = -0.1,
+      omic_type = "Peptide"
+    )
+}
+
+
 # Apply a process function to a dataframe based on its name
 process_data <- function(df, name) {
   switch(
     name,
     "rna" = df %>% format_rna(),
     "protein" = df %>% format_protein(),
+    "phosphosite" = df %>% format_phosphosite(),
     "kinase_stk" = df %>% format_kinase(),
     "kinase_ptk" = df %>% format_kinase(),
+#    "peptide" = df %>% format_phosphosite_peptides(), # -Kunch
     "peptide" = df %>% format_krsa_peptides(),
     df
   )
@@ -116,26 +223,316 @@ fix_hgnc <- function(X) {
     rename(name = 1)
 }
 
-generate_string_ppi <- function(species) {
+fix_phosphosite_hgnc <- function(X) {
+  if (nrow(X) == 0) return(X)
+
+  site_parts <- X %>%
+    dplyr::mutate(
+      .site_row = dplyr::row_number(),
+      .parent = phosphosite_parent(name),
+      .site_suffix = stringr::str_extract(name, "_[STY]\\d+$")
+    )
+
+  parent_map <- tibble::tibble(
+    name = unique(site_parts$.parent),
+    original_parent = unique(site_parts$.parent)
+  ) %>%
+    fix_hgnc() %>%
+    dplyr::rename(.fixed_parent = name, .parent = original_parent)
+
+  site_parts %>%
+    dplyr::left_join(parent_map, by = ".parent") %>%
+    dplyr::mutate(name = paste0(.fixed_parent, .site_suffix)) %>%
+    dplyr::arrange(.site_row) %>%
+    dplyr::select(-.site_row, -.parent, -.site_suffix, -.fixed_parent)
+}
+
+fix_phosphosite_measurements_hgnc <- function(X, phosphosite_level) {
+  if (nrow(X) == 0) return(X)
+
+  parent_map <- tibble::tibble(
+    name = unique(X$protein),
+    original_parent = unique(X$protein)
+  ) %>%
+    fix_hgnc() %>%
+    dplyr::rename(fixed_parent = name, protein = original_parent)
+
+  X %>%
+    dplyr::mutate(site_suffix = stringr::str_extract(site_id, "_[STY]\\d+$")) %>%
+    dplyr::left_join(parent_map, by = "protein") %>%
+    dplyr::mutate(
+      protein = fixed_parent,
+      site_id = paste0(fixed_parent, site_suffix),
+      representative_site = site_id,
+      node = if (isTRUE(phosphosite_level)) site_id else protein
+    ) %>%
+    dplyr::select(-site_suffix, -fixed_parent)
+}
+
+network_resource_cache_file <- function(resource, species, string_confidence = NULL,
+                                        cache_dir = here::here("data/network_cache")) {
+  parts <- c(resource, species)
+  if (!is.null(string_confidence)) {
+    parts <- c(parts, paste0("confidence_", gsub("\\.", "p", string_confidence)))
+  }
+  file.path(cache_dir, paste0(paste(parts, collapse = "_"), ".rds"))
+}
+
+load_or_build_network_resource <- function(cache_file, builder,
+                                           cache_enabled = isTRUE(cache_network_resources)) {
+  if (isTRUE(cache_enabled) && file.exists(cache_file)) {
+    message("Reusing network resource cache: ", cache_file)
+    return(readRDS(cache_file))
+  }
+
+  resource <- builder()
+
+  if (isTRUE(cache_enabled)) {
+    dir.create(dirname(cache_file), recursive = TRUE, showWarnings = FALSE)
+    saveRDS(resource, cache_file)
+    message("Created network resource cache: ", cache_file)
+  }
+
+  resource
+}
+
+generate_string_ppi <- function(species, confidence_threshold = 0.5) {
   species_id = c(human = "9606", mouse = "10090", rat = "10116")[species]
-  
-  links = str_glue("https://stringdb-downloads.org/download/protein.links.v12.0/{species_id}.protein.links.v12.0.txt.gz")
-  info = str_glue("https://stringdb-downloads.org/download/protein.info.v12.0/{species_id}.protein.info.v12.0.txt.gz")
-  
-  names <- read_tsv(info) %>%
-    select(1:2)
-  
-  interactions <- read_delim(links, delim = " ") %>%
-    mutate(combined_score = combined_score / 1000) %>%
-    left_join(names, by = c("protein1" = "#string_protein_id")) %>%
-    rename(protein1_symbol = preferred_name) %>%
-    left_join(names, by = c("protein2" = "#string_protein_id")) %>%
-    rename(protein2_symbol = preferred_name) %>% 
-    select(-protein1, -protein2) %>%
-    filter(combined_score >= .5) %>%
-    mutate(cost = pmax(0.01, 1-combined_score)) %>%
-    select(-combined_score) %>%
-    rename(from = 1, to = 2)
+
+  cache_file <- network_resource_cache_file(
+    resource = "STRING_v12_0",
+    species = species,
+    string_confidence = confidence_threshold
+  )
+
+  load_or_build_network_resource(cache_file, function() {
+    links = str_glue("https://stringdb-downloads.org/download/protein.links.v12.0/{species_id}.protein.links.v12.0.txt.gz")
+    info = str_glue("https://stringdb-downloads.org/download/protein.info.v12.0/{species_id}.protein.info.v12.0.txt.gz")
+
+    names <- read_tsv(info) %>%
+      select(1:2)
+
+    read_delim(links, delim = " ") %>%
+      mutate(combined_score = combined_score / 1000) %>%
+      left_join(names, by = c("protein1" = "#string_protein_id")) %>%
+      rename(protein1_symbol = preferred_name) %>%
+      left_join(names, by = c("protein2" = "#string_protein_id")) %>%
+      rename(protein2_symbol = preferred_name) %>%
+      select(-protein1, -protein2) %>%
+      filter(combined_score >= confidence_threshold) %>%
+      mutate(cost = pmax(0.01, 1-combined_score)) %>%
+      select(-combined_score) %>%
+      rename(from = 1, to = 2)
+  })
+}
+# Additional signaling-edge resources for the PCSF interactome.
+# These functions return the same columns used by Kinograte: from, to, cost.
+
+omnipath_species_id <- function(species) {
+  ids <- c(human = 9606L, mouse = 10090L, rat = 10116L)
+
+  if (!species %in% names(ids)) {
+    stop("Unsupported species: ", species, ". Use human, mouse, or rat.")
+  }
+
+  unname(ids[[species]])
+}
+
+as_ppi_edges <- function(x, from_col, to_col, edge_cost, source_name) {
+  missing_cols <- setdiff(c(from_col, to_col), names(x))
+
+  if (length(missing_cols) > 0) {
+    stop(
+      source_name, " data are missing expected column(s): ",
+      paste(missing_cols, collapse = ", "),
+      ". Available columns: ", paste(names(x), collapse = ", ")
+    )
+  }
+
+  x %>%
+    transmute(
+      from = as.character(.data[[from_col]]),
+      to = as.character(.data[[to_col]]),
+      cost = as.numeric(.env$edge_cost),
+      source = .env$source_name
+    )
+}
+
+as_phosphosite_edges <- function(x, edge_cost, source_name, observed_sites = NULL) {
+  required_cols <- c(
+    "enzyme_genesymbol", "substrate_genesymbol",
+    "residue_type", "residue_offset", "modification"
+  )
+  missing_cols <- setdiff(required_cols, names(x))
+
+  if (length(missing_cols) > 0) {
+    stop(
+      source_name, " data are missing expected column(s): ",
+      paste(missing_cols, collapse = ", "),
+      ". Available columns: ", paste(names(x), collapse = ", ")
+    )
+  }
+
+  edges <- x %>%
+    dplyr::transmute(
+      kinase = stringr::str_trim(as.character(enzyme_genesymbol)),
+      parent_protein = stringr::str_trim(as.character(substrate_genesymbol)),
+      residue = stringr::str_to_upper(stringr::str_trim(as.character(residue_type))),
+      position = suppressWarnings(as.integer(residue_offset)),
+      modification = stringr::str_to_lower(as.character(modification))
+    ) %>%
+    dplyr::filter(
+      modification == "phosphorylation",
+      residue %in% c("S", "T", "Y"),
+      !is.na(position), position > 0,
+      !is.na(kinase), kinase != "",
+      !is.na(parent_protein), parent_protein != ""
+    ) %>%
+    dplyr::mutate(
+      phosphosite = paste0(parent_protein, "_", residue, position),
+      from = kinase,
+      to = phosphosite,
+      cost = as.numeric(.env$edge_cost),
+      source = .env$source_name,
+      edge_type = "kinase_to_phosphosite"
+    )
+
+  if (!is.null(observed_sites)) {
+    edges <- edges %>%
+      dplyr::filter(phosphosite %in% observed_sites)
+  }
+
+  edges %>%
+    dplyr::select(from, to, cost, source, edge_type, kinase, phosphosite, parent_protein) %>%
+    dplyr::distinct()
+}
+
+collapse_undirected_ppi <- function(x) {
+  if (!"edge_type" %in% names(x)) x$edge_type <- "protein_context"
+  if (!"kinase" %in% names(x)) x$kinase <- NA_character_
+  if (!"phosphosite" %in% names(x)) x$phosphosite <- NA_character_
+  if (!"parent_protein" %in% names(x)) x$parent_protein <- NA_character_
+
+  x %>%
+    transmute(
+      from_raw = stringr::str_trim(as.character(from)),
+      to_raw = stringr::str_trim(as.character(to)),
+      cost = as.numeric(cost),
+      source = as.character(source),
+      edge_type = as.character(edge_type),
+      kinase = as.character(kinase),
+      phosphosite = as.character(phosphosite),
+      parent_protein = as.character(parent_protein)
+    ) %>%
+    filter(
+      !is.na(from_raw), from_raw != "",
+      !is.na(to_raw), to_raw != "",
+      from_raw != to_raw,
+      is.finite(cost), cost > 0
+    ) %>%
+    transmute(
+      from = if_else(from_raw <= to_raw, from_raw, to_raw),
+      to = if_else(from_raw <= to_raw, to_raw, from_raw),
+      cost = pmax(cost, 0.01),
+      source = source,
+      edge_type = edge_type,
+      kinase = kinase,
+      phosphosite = phosphosite,
+      parent_protein = parent_protein
+    ) %>%
+    group_by(from, to) %>%
+    summarise(
+      cost = min(cost),
+      source = paste(sort(unique(source)), collapse = "|"),
+      edge_type = paste(sort(unique(edge_type)), collapse = "|"),
+      kinase = paste(sort(unique(stats::na.omit(kinase))), collapse = "|"),
+      phosphosite = paste(sort(unique(stats::na.omit(phosphosite))), collapse = "|"),
+      parent_protein = paste(sort(unique(stats::na.omit(parent_protein))), collapse = "|"),
+      .groups = "drop"
+    ) %>%
+    mutate(
+      kinase = na_if(kinase, ""),
+      phosphosite = na_if(phosphosite, ""),
+      parent_protein = na_if(parent_protein, "")
+    )
+}
+
+generate_omnipath_site_edges <- function(species, observed_sites, edge_cost = 0.5) {
+  cache_file <- network_resource_cache_file("OmniPath_enzyme_PTM", species)
+  raw <- load_or_build_network_resource(cache_file, function() {
+    OmnipathR::enzyme_substrate(
+      organism = omnipath_species_id(species),
+      genesymbols = TRUE,
+      license = "academic",
+      cache = TRUE,
+      silent = TRUE
+    )
+  })
+
+  as_phosphosite_edges(
+    raw,
+    edge_cost = edge_cost,
+    source_name = "OmniPath_enzyme_PTM",
+    observed_sites = observed_sites
+  )
+}
+
+generate_networkin_site_edges <- function(species, observed_sites, edge_cost = 0.50) {
+  cache_file <- network_resource_cache_file("OmniPath_NetworKIN", species)
+  raw <- load_or_build_network_resource(cache_file, function() {
+    OmnipathR::enzyme_substrate(
+      resources = "NetworKIN",
+      organism = omnipath_species_id(species),
+      genesymbols = TRUE,
+      strict_evidences = TRUE,
+      license = "academic",
+      cache = TRUE,
+      silent = TRUE
+    )
+  })
+
+  as_phosphosite_edges(
+    raw,
+    edge_cost = edge_cost,
+    source_name = "NetworKIN",
+    observed_sites = observed_sites
+  )
+}
+
+generate_phosphositeplus_site_edges <- function(species, observed_sites, edge_cost = 0.25) {
+  cache_file <- network_resource_cache_file("OmniPath_PhosphoSitePlus", species)
+  raw <- load_or_build_network_resource(cache_file, function() {
+    OmnipathR::enzyme_substrate(
+      resources = "PhosphoSite",
+      organism = omnipath_species_id(species),
+      genesymbols = TRUE,
+      strict_evidences = TRUE,
+      license = "academic",
+      cache = TRUE,
+      silent = TRUE
+    )
+  })
+
+  as_phosphosite_edges(
+    raw,
+    edge_cost = edge_cost,
+    source_name = "PhosphoSitePlus",
+    observed_sites = observed_sites
+  )
+}
+
+generate_site_parent_edges <- function(observed_sites, edge_cost = 0.01) {
+  tibble::tibble(
+    from = observed_sites,
+    to = phosphosite_parent(observed_sites),
+    cost = as.numeric(edge_cost),
+    source = "site_parent_identity",
+    edge_type = "site_parent_identity",
+    kinase = NA_character_,
+    phosphosite = observed_sites,
+    parent_protein = phosphosite_parent(observed_sites)
+  ) %>%
+    dplyr::distinct()
 }
 
 generate_phuEGO_ppi <- function(species) {
@@ -180,7 +577,6 @@ generate_phuEGO_ppi <- function(species) {
   interactions
 }
 
-#Load data
 data <- params$data %>%
   keep( ~ file.exists(here(.))) %>%
   map( ~ read_csv(., name_repair = "unique_quiet")) %>%
@@ -189,7 +585,11 @@ data <- params$data %>%
 #Fix HGNC symbols in all the data if input is human
 if (params$species == "human") {
   data <- data %>%
-    map(fix_hgnc)
+    imap(~ if (.y == "phosphosite" && isTRUE(phosphosite_level)) {
+      fix_phosphosite_hgnc(.x)
+    } else {
+      fix_hgnc(.x)
+    })
 } 
 
 #Fix HGNC symbols for peptides, if we don't have human data but we do have peptide data, which will later get converted to species-specific orthologs
@@ -215,7 +615,7 @@ if (params$species != "human" & !is.null(data$kinase)) {
       babelgene::orthologs(.$name, species = params$species),
       by = c("name" = "human_symbol")
     ) %>%
-    select(name = symbol, prize, type)
+    select(name = symbol, prize, type, signed_effect)
 }
 
 #Get peptide ortholog symbols if non-kinase input is not human and peptide data was present, i.e., if we have kinase + peptide data and the RNA input is not human, we need to get the species-specific orthologs of the peptides now too.
@@ -254,7 +654,9 @@ get_chea3_enrichment <- function(genes, query_name = "myQuery", url = "https://m
 }
 
 #Predict transcription factors involved in all the data so far
-chea3_results <- get_chea3_enrichment(data %>% map(pull, name) %>% unlist) %>%
+chea3_results <- get_chea3_enrichment(
+  data %>% map(pull, name) %>% unlist() %>% phosphosite_parent()
+) %>%
   percentile_rank(`TF`, `Rank`, desc = TRUE) %>%
   top_hits(prec_cutoff = .9, omic_type = "TF") #Currently, select the top 10%
 
@@ -297,9 +699,9 @@ fisher_p_combine <- function(pvalues) {
 }
 
 #Here we make scores additive and concatenate the types with a | delimiter for plotting later.
-combine_scores_patch <- function(df_rna = NULL, df_prot = NULL, df_kin = NULL, tf_kin = NULL, df_pep = NULL) {
+combine_scores_patch <- function(df_rna = NULL, df_prot = NULL, df_phos = NULL, df_kin = NULL, tf_kin = NULL, df_pep = NULL) {
   
-  base::rbind(df_rna, df_prot, df_kin, tf_kin, df_pep) %>% 
+  base::rbind(df_rna, df_prot, df_phos, df_kin, tf_kin, df_pep) %>% 
     dplyr::group_by(name) %>%
     dplyr::mutate(inv_prize=1-prize) %>%
     dplyr::summarise(prize = fisher_p_combine(inv_prize),
@@ -308,22 +710,180 @@ combine_scores_patch <- function(df_rna = NULL, df_prot = NULL, df_kin = NULL, t
 
 }
 
+phosphosite_input <- params$data$phosphosite
+
+phosphosite_measurements <- if (!is.null(phosphosite_input) &&
+    file.exists(here::here(phosphosite_input))) {
+  readr::read_csv(here::here(phosphosite_input), name_repair = "unique_quiet") %>%
+    select_phosphosite_rows(phosphosite_level = phosphosite_level) %>%
+    { if (params$species == "human") {
+        fix_phosphosite_measurements_hgnc(., phosphosite_level)
+      } else . }
+} else {
+  tibble::tibble(
+    node = character(), representative_site = character(), protein = character(),
+    site_id = character(), logFC = numeric(), adj.P.Val = numeric(), site_score = numeric()
+  )
+}
+
+kinase_effects <- summarize_signed_kinase_effects(data$kinase)
+kinase_scores_for_combination <- if (!is.null(data$kinase)) {
+  data$kinase %>% dplyr::select(name, prize, type)
+} else NULL
+
+observed_phosphoproteomic_nodes <- c(
+  if (!is.null(data$phosphosite)) data$phosphosite$name else character()
+) %>% unique()
+
+network_phosphosite_measurements <- phosphosite_measurements %>%
+  dplyr::filter(node %in% observed_phosphoproteomic_nodes)
+
 combined_df <- combine_scores_patch(df_rna = data$rna,
                               df_prot = data$protein,
-                              df_kin = data$kinase,
-                              # df_pep = data$peptide,
+                              df_phos = data$phosphosite,
+                              df_kin = kinase_scores_for_combination,
+                              df_pep = data$peptide,
                               tf_kin = chea3_results)
+dir.create("results", showWarnings = FALSE)
+readr::write_csv(combined_df, "results/combined_node_scores.csv")
 
-string_ppi <- generate_string_ppi(params$species)
+include_string_context <- if (!is.null(params$include_string_context)) {
+  isTRUE(params$include_string_context)
+} else TRUE
 
-phuego_ppi <- generate_phuEGO_ppi(params$species)
+# A true protein modality requires the protein interactome. This leaves
+# phosphosite-only behavior unchanged when protein input is absent.
+has_protein_input <- !is.null(data$protein) && nrow(data$protein) > 0
+include_protein_context <- include_string_context || has_protein_input
+use_site_specific_network <- isTRUE(phosphosite_level) &&
+  nrow(network_phosphosite_measurements) > 0
 
-ppi <- bind_rows(string_ppi, phuego_ppi) %>%
-    group_by(from, to) %>%
-    summarise(cost = mean(cost)) %>%
-    ungroup()
+network_inputs <- build_phosphoproteomic_network(
+  phosphosite_level = use_site_specific_network,
+  species = params$species,
+  selected_phosphosite_rows = network_phosphosite_measurements,
+  kinase_effects = kinase_effects,
+  include_string_context = include_protein_context,
+  filter_sign = filter_sign,
+  generate_omnipath_site_edges_fn = generate_omnipath_site_edges,
+  generate_networkin_site_edges_fn = generate_networkin_site_edges,
+  generate_phosphositeplus_site_edges_fn = generate_phosphositeplus_site_edges,
+  generate_string_ppi_fn = generate_string_ppi,
+  generate_phuego_ppi_fn = generate_phuEGO_ppi,
+  generate_site_parent_edges_fn = generate_site_parent_edges
+)
 
-kinograte_res <- quiet(kinograte(combined_df, ppi_network = ppi, cluster = F, seed = 123, mu=1e-4))
+phosphoproteomic_network_mode <- network_inputs$mode
+ppi_raw <- network_inputs$edges
+
+if (nrow(ppi_raw) == 0) {
+  stop("No interactome edges were available for the selected inputs and context settings.")
+}
+
+cat("\nPhosphoproteomic network mode:", phosphoproteomic_network_mode, "\n")
+
+cat("\nRaw edge rows by source:\n")
+print(
+  ppi_raw %>%
+    count(source, name = "edge_rows")
+)
+
+# Kinograte/PCSF uses an undirected interactome.
+# Canonicalize A--B and B--A, remove invalid/self edges,
+# and retain the lowest available cost for duplicate edges.
+ppi_with_sources <- collapse_undirected_ppi(ppi_raw)
+
+readr::write_csv(
+  ppi_with_sources,
+  "results/ppi_edges_with_sources.csv"
+)
+
+# Kinograte receives only its required three columns.
+ppi <- ppi_with_sources %>%
+  select(from, to, cost)
+
+annotate_network_edges <- function(edges, edge_metadata = ppi_with_sources) {
+  edges %>%
+    mutate(
+      .key_from = if_else(as.character(from) <= as.character(to), as.character(from), as.character(to)),
+      .key_to = if_else(as.character(from) <= as.character(to), as.character(to), as.character(from))
+    ) %>%
+    left_join(
+      edge_metadata %>%
+        rename(.key_from = from, .key_to = to, ppi_cost = cost),
+      by = c(".key_from", ".key_to")
+    ) %>%
+    select(-.key_from, -.key_to)
+}
+
+kinograte_res <- quiet(kinograte(combined_df, ppi_network = ppi, cluster = F, seed = 123, mu=1e-4,b=3))
+#readr::write_csv(kinograte_res$nodes, "results/network_nodes.csv")
+write_csv(
+  igraph::as_data_frame(kinograte_res$network, what = "vertices"),
+  "results/network_nodes.csv"
+)
+readr::write_csv(
+  igraph::as_data_frame(kinograte_res$network, what = "edges") %>%
+    annotate_network_edges(),
+  "results/network_edges.csv"
+)
+#below added to eval runtime
+tick("load_data")
+data <- params$data %>%
+  keep(~ file.exists(here(.))) %>%
+  map(~ read_csv(., name_repair = "unique_quiet")) %>%
+  imap(process_data)
+tock("load_data")
+
+
+genes <- data %>% purrr::map(dplyr::pull, name) %>% unlist() %>% phosphosite_parent()
+cat("Total genes:", length(genes), "\n")
+cat("Unique genes:", dplyr::n_distinct(genes), "\n")
+# check bad entries
+bad <- genes[is.na(genes) | genes == "" | grepl("[^A-Za-z0-9\\-]", genes)]
+cat("Bad entries:", length(bad), "\n")
+#if (bad >0){
+print(head(bad, 10))
+#}
+genes <- genes %>%
+  unique() %>%
+  na.omit() %>%
+  .[. != ""] %>%
+  stringr::str_trim() %>%
+  stringr::str_to_upper() %>%
+  .[grepl("^[A-Z0-9\\-]+$", .)]
+
+tick("tf_inference")
+#chea3_results <- get_chea3_enrichment(data %>% map(pull, name) %>% unlist()) %>%
+#  percentile_rank(`TF`, `Rank`, desc = TRUE) %>%
+#  top_hits(prec_cutoff = .9, omic_type = "TF")
+chea3_results <- get_chea3_enrichment(genes) %>%
+  percentile_rank(`TF`, `Rank`, desc = TRUE) %>%
+  top_hits(prec_cutoff = .9, omic_type = "TF")
+tock("tf_inference")
+
+#tick("string_ppi")
+#string_ppi <- generate_string_ppi(params$species)
+#tock("string_ppi")
+
+#tick("phuego_ppi")
+#phuego_ppi <- generate_phuEGO_ppi(params$species)
+#tock("phuego_ppi")
+
+#tick("pcsf")
+#kinograte_res <- quiet(kinograte(combined_df, ppi_network = ppi, cluster = FALSE, seed = 123, mu = 1e-20, b=3, w=20))
+#tock("pcsf")
+
+runtime_summary <- tibble::tibble(
+  step = names(timings),
+  seconds = unlist(timings)
+) %>%
+  dplyr::arrange(dplyr::desc(seconds)) %>%
+  dplyr::mutate(seconds = round(seconds, 2))
+
+print(runtime_summary)
+readr::write_csv(runtime_summary, "results/data_qmd_runtime_summary.csv")
+
 ```
 
 ```{r}
@@ -347,4 +907,67 @@ score_plot <- function(df, title = "Prize Plot", subtitle = "", interactive = T)
   }
 }
 score_plot(combined_df %>% rename(score = prize) %>% arrange(score), interactive = TRUE)
+```
+```{r}
+#| label: "multiomic_heatmap"
+#| fig-width: 8
+#| fig-height: 11
+#| message: false
+#| warning: false
+
+library(ComplexHeatmap)
+library(circlize)
+library(grid)
+
+prot_fc <- if (!is.null(params$data$protein) && file.exists(params$data$protein)) {
+  readr::read_csv(params$data$protein, show_col_types = FALSE) %>%
+    transmute(name = .[[1]], Protein = .[[2]])
+} else NULL
+
+phos_fc <- if (nrow(phosphosite_measurements) > 0) {
+  phosphosite_measurements %>%
+    transmute(name = node, Phosphosite = site_score)
+} else NULL
+
+pep_fc <- if (!is.null(params$data$peptide) && file.exists(params$data$peptide)) {
+  mapping <- readr::read_csv(here::here("data/assets/mapping_patch.csv"), show_col_types = FALSE) %>%
+    rename(ID = Peptide) %>% bind_rows(stk_pamchip_87102_mapping, ptk_pamchip_86402_mapping)
+  readr::read_csv(params$data$peptide, show_col_types = FALSE) %>%
+    select(Peptide, totalMeanLFC) %>% distinct(Peptide, .keep_all = TRUE) %>%
+    left_join(mapping, by = c("Peptide" = "ID")) %>%
+    group_by(HGNC) %>% summarise(Peptide = mean(totalMeanLFC, na.rm = TRUE), .groups = "drop") %>%
+    transmute(name = HGNC, Peptide)
+} else NULL
+
+kin_score <- if (!is.null(data$kinase)) data$kinase %>% transmute(name, Kinase = prize) else NULL
+tf_score  <- if (exists("chea3_results")) chea3_results %>% transmute(name, TF = prize) else NULL
+rna_fc    <- if (!is.null(params$data$rna) && file.exists(params$data$rna)) readr::read_csv(params$data$rna, show_col_types = FALSE) %>%
+  transmute(name = .[[1]], RNA = .[[2]]) else NULL
+
+hm_df <- list(combined_df %>% transmute(name, Prize = prize), rna_fc, kin_score, pep_fc, prot_fc, phos_fc, tf_score) %>%
+  purrr::compact() %>% purrr::reduce(full_join, by = "name") %>%
+  group_by(name) %>% summarise(across(where(is.numeric), ~ mean(.x, na.rm = TRUE)), .groups = "drop") %>%
+  arrange(desc(Prize)) %>% slice_head(n = 50) #top 50 genes
+
+hm <- hm_df %>% tibble::column_to_rownames("name") %>% as.matrix()
+hm <- t(scale(t(hm)))  # rowscale
+hm[is.na(hm)] <- 0
+
+fs_row <- max(6, min(11, 220 / nrow(hm)))
+fs_col <- max(9, min(12, 70 / ncol(hm) + 6))
+
+ComplexHeatmap::Heatmap(
+  hm,
+  name = "z-score",
+  col = circlize::colorRamp2(c(-2, 0, 2), c("#3B4CC0", "white", "#B40426")),
+  cluster_rows = TRUE,
+  cluster_columns = FALSE,
+  row_names_gp = grid::gpar(fontsize = fs_row),
+  column_names_gp = grid::gpar(fontsize = fs_col, fontface = "bold"),
+  row_names_side = "left",
+  border = TRUE,
+  heatmap_legend_param = list(title_gp = grid::gpar(fontface = "bold")),
+  column_title = "Integrated multi-omic evidence by network node"
+)
+#Because the modalities are on different numeric scales, the heatmap does t(scale(t(hm)))
 ```

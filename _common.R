@@ -25,6 +25,7 @@ local({
 #
 # BiocManager::install("org.Hs.eg.db", force = TRUE)
 # BiocManager::install("topGO", force = TRUE)
+# BiocManager::install("OmnipathR")
 # renv::install("IOR-Bioinformatics/PCSF", force = TRUE)
 # renv::install("CogDisResLab/Kinograte", force = TRUE)
 
@@ -50,6 +51,7 @@ suppressPackageStartupMessages({
   library(svglite)
   library(httr)
   library(jsonlite)
+  #library(OmnipathR)
 })
 
 knitr::opts_chunk$set(
