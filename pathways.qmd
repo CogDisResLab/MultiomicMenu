@@ -31,14 +31,23 @@ combined <- centrality %>%
   arrange(desc(rank)) %>%
   deframe()
 
+# Enrichment tools require gene symbols, so collapse only for enrichment while
+# leaving the site-resolved network ranking in `combined` unchanged.
+pathway_combined <- tibble::tibble(name = names(combined), rank = as.numeric(combined)) %>%
+  mutate(name = phosphosite_parent(name)) %>%
+  group_by(name) %>%
+  summarise(rank = max(rank, na.rm = TRUE), .groups = "drop") %>%
+  arrange(desc(rank)) %>%
+  deframe()
+
 ### GSEA
 if(rlang::has_name(data, "rna")) {
   # We can only do GSEA if we have RNA data
   
-  gmt_pathways <- fgsea::gmtPathways("data/Human_GOBP_AllPathways_noPFOCR_with_GO_iea_March_02_2026_symbol.gmt")
+  gmt_pathways <- fgsea::gmtPathways(params$gmt)
   
   gsea_pathways <-
-    fgsea::fgsea(gmt_pathways, combined, scoreType = "pos") %>%
+    fgsea::fgsea(gmt_pathways, pathway_combined, scoreType = "pos") %>%
     select(pathway, NES, size, padj, leadingEdge) %>%
     separate(pathway,
              sep = "%",
@@ -73,9 +82,9 @@ do_enrichr <- function(X) {
 }
 
 if(rlang::has_name(data, "rna")) { #If we do GSEA on the whole network, do Enrichr on the top 10% of the network, else do Enrichr on the whole network
-  topcombined <- combined[combined >= quantile(combined, 0.9)]
+  topcombined <- pathway_combined[pathway_combined >= quantile(pathway_combined, 0.9)]
 } else {
-  topcombined <- combined[combined >= 0]
+  topcombined <- pathway_combined[pathway_combined >= 0]
 }
 
 enrichr_pathways <- do_enrichr(names(topcombined)) %>%

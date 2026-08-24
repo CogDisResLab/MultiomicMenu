@@ -15,15 +15,146 @@ source("_common.R")
 
 ```{r}
 #| label: "networks_computations"
-saveRDS(kinograte_res, 'mdma_24_0_kinograte_res.RDS')
+
+
+export_plotted_network_files <- function(plot_data, subnet_graph, file_prefix = "subnetwork") {
+
+  dir.create("results", showWarnings = FALSE)
+
+  cat("\nplot_data columns:\n")
+  print(names(plot_data))
+
+  plotted_nodes <- plot_data %>%
+    dplyr::distinct(vertex.names, .keep_all = TRUE) %>%
+    dplyr::rename(node = vertex.names)
+
+  plotted_node_names <- plotted_nodes$node
+
+  plotted_edges <- igraph::as_data_frame(subnet_graph, what = "edges") %>%
+    annotate_network_edges()
+
+  readr::write_csv(
+    plotted_nodes,
+    file.path("results", paste0(file_prefix, "_plotted_network_nodes.csv"))
+  )
+
+  readr::write_csv(
+    plotted_edges,
+    file.path("results", paste0(file_prefix, "_plotted_network_edges.csv"))
+  )
+
+  node_types <- plotted_nodes %>%
+    dplyr::transmute(
+      node,
+      phosphosite = stringr::str_detect(type.y, "Phosphosite|Protein"),
+      `reporter peptide` = stringr::str_detect(type.y, "Peptide"),
+      kinase = stringr::str_detect(type.y, "Kinase"),
+      TF = stringr::str_detect(type.y, "TF")
+    ) %>%
+    tidyr::pivot_longer(-node, names_to = "type", values_to = "has_type") %>%
+    dplyr::filter(has_type) %>%
+    dplyr::select(node, type)
+
+  protein_features <- tibble::tibble()
+  if (exists("phosphosite_measurements") && nrow(phosphosite_measurements) > 0) {
+    protein_features <- phosphosite_measurements %>%
+      dplyr::filter(node %in% plotted_node_names) %>%
+      dplyr::transmute(
+        node,
+        feature = representative_site,
+        type = "phosphosite",
+        effect_size = as.numeric(logFC),
+        adj_p_value = as.numeric(adj.P.Val)
+      )
+  }
+
+  peptide_features <- tibble::tibble()
+  if (!is.null(params$data$peptide) && file.exists(here::here(params$data$peptide))) {
+
+    peptide_raw <- readr::read_csv(here::here(params$data$peptide), show_col_types = FALSE)
+
+    cat("\nraw peptide CSV columns:\n")
+    print(names(peptide_raw))
+
+    peptide_mapping <- readr::read_csv(here::here("data/assets/mapping_patch.csv"), show_col_types = FALSE) %>%
+      dplyr::rename(ID = Peptide) %>%
+      dplyr::bind_rows(stk_pamchip_87102_mapping, ptk_pamchip_86402_mapping)
+
+    peptide_features <- peptide_raw %>%
+      dplyr::select(Peptide, totalMeanLFC) %>%
+      dplyr::distinct(Peptide, .keep_all = TRUE) %>%
+      dplyr::left_join(peptide_mapping, by = c("Peptide" = "ID")) %>%
+      dplyr::filter(!is.na(HGNC)) %>%
+      { 
+        if (params$species != "human") {
+          dplyr::inner_join(
+            .,
+            babelgene::orthologs(unique(.$HGNC), species = params$species) %>%
+              dplyr::select(HGNC = human_symbol, node = symbol),
+            by = "HGNC"
+          )
+        } else {
+          dplyr::mutate(., node = HGNC)
+        }
+      } %>%
+      dplyr::filter(node %in% plotted_node_names) %>%
+      dplyr::transmute(
+        node,
+        feature = Peptide,
+        type = "reporter peptide",
+        effect_size = as.numeric(totalMeanLFC),
+        adj_p_value = NA_real_
+      )
+  }
+
+  kinase_features <- if (!is.null(data$kinase)) {
+    data$kinase %>%
+      dplyr::filter(name %in% plotted_node_names) %>%
+      dplyr::transmute(
+        node = name,
+        feature = name,
+        type = "kinase",
+        effect_size = prize,
+        adj_p_value = NA_real_
+      )
+  } else tibble::tibble()
+
+  tf_features <- if (exists("chea3_results")) {
+    chea3_results %>%
+      dplyr::filter(name %in% plotted_node_names) %>%
+      dplyr::transmute(
+        node = name,
+        feature = name,
+        type = "TF",
+        effect_size = prize,
+        adj_p_value = NA_real_
+      )
+  } else tibble::tibble()
+
+  feature_rows <- dplyr::bind_rows(
+    protein_features,
+    peptide_features,
+    kinase_features,
+    tf_features
+  ) %>%
+    dplyr::semi_join(node_types, by = c("node", "type")) %>%
+    dplyr::arrange(node, type, feature)
+
+  readr::write_csv(
+    feature_rows,
+    file.path("results", paste0(file_prefix, "_plotted_network_node_features.csv"))
+  )
+}
 generate_subnetwork <- function(kinograte_res, genes) {
   network <- kinograte_res$network
   nodes <- kinograte_res$nodes
   
   genes <- genes[genes %in% nodes$Protein]
   
-  subnet = induced_subgraph(network, genes) %>%
-    delete_vertices(V(.)[degree(.) == 0]) %>%
+  subnet_graph <- induced_subgraph(network, genes) %>%
+    delete_vertices(V(.)[degree(.) == 0])
+  
+  subnet <- subnet_graph %>%
     asNetwork()
   
   plot_data <- ggnetwork(subnet, layout = "fruchtermanreingold") %>%
@@ -31,7 +162,7 @@ generate_subnetwork <- function(kinograte_res, genes) {
       mutate(RNA = as.numeric(str_detect(type.y, "RNA")),
          Kinase = as.numeric(str_detect(type.y, "Kinase")),
          Hidden = as.numeric(str_detect(type.y, "Hidden")),
-         Protein = as.numeric(str_detect(type.y, "Protein")),
+         Protein = as.numeric(str_detect(type.y, "Phosphosite|Protein")),
          Peptide = as.numeric(str_detect(type.y, "Peptide")),
          TF = as.numeric(str_detect(type.y, "TF")))
 
@@ -43,6 +174,13 @@ generate_subnetwork <- function(kinograte_res, genes) {
     coord_equal() +
     theme_blank() +
     theme(legend.position = "none")
+  
+  export_plotted_network_files(
+    plot_data = plot_data,
+    subnet_graph = subnet_graph,
+    file_prefix = "subnetwork"
+  )
+  
   
   plot
 
@@ -52,8 +190,10 @@ generate_seeded_network <- function(kinograte_res, gene, degree=1) {
   network <- kinograte_res$network
   nodes <- kinograte_res$nodes
 
-  subnet <- make_ego_graph(network, gene, order = degree)[[1]] %>%
-    delete_vertices(V(.)[degree(.) == 0]) %>%
+  subnet_graph <- make_ego_graph(network, gene, order = degree)[[1]] %>%
+    delete_vertices(V(.)[degree(.) == 0])
+  
+  subnet <- subnet_graph %>%
     asNetwork()
   
   plot_data <- ggnetwork(subnet, layout = "fruchtermanreingold") %>%
@@ -61,7 +201,7 @@ generate_seeded_network <- function(kinograte_res, gene, degree=1) {
       mutate(RNA = as.numeric(str_detect(type.y, "RNA")),
          Kinase = as.numeric(str_detect(type.y, "Kinase")),
          Hidden = as.numeric(str_detect(type.y, "Hidden")),
-         Protein = as.numeric(str_detect(type.y, "Protein")),
+         Protein = as.numeric(str_detect(type.y, "Phosphosite|Protein")),
          Peptide = as.numeric(str_detect(type.y, "Peptide")),
          TF = as.numeric(str_detect(type.y, "TF")))
 
@@ -74,13 +214,265 @@ generate_seeded_network <- function(kinograte_res, gene, degree=1) {
     theme_blank() +
     theme(legend.position = "none")
   
+  export_plotted_network_files(
+    plot_data = plot_data,
+    subnet_graph = subnet_graph,
+    file_prefix = "seeded_network"
+  )
+  
   plot
+  
+  
 }
 
 ```
 
 ```{r}
-genes_input <- combined %>% head(100) %>% names()
+get_module_backbone_nodes <- function(
+    kinograte_res,
+    combined_df,
+    n_modules = 6,
+    seeds_per_module = 8,
+    prize_weight = 0.6
+) {
+  g <- kinograte_res$network
+
+  # PCSF recurrence weights
+  w <- E(g)$weight
+  if (is.null(w)) w <- rep(1, ecount(g))
+
+  # Recurrence-weighted network communities
+  comm <- cluster_louvain(g, weights = w)
+
+  # Within-community weighted strength
+  node_scores <- purrr::imap_dfr(groups(comm), \(vs, m) {
+    sg <- induced_subgraph(g, vs)
+    sw <- E(sg)$weight
+    if (is.null(sw)) sw <- rep(1, ecount(sg))
+
+    tibble(
+      name = V(sg)$name,
+      module = as.integer(m),
+      local_strength = strength(sg, weights = sw)
+    )
+  })
+
+  # Prize percentile only among nodes that actually have prizes
+  prize_scores <- combined_df %>%
+    transmute(
+      name,
+      prize,
+      prize_rank = percent_rank(prize)
+    )
+
+  node_scores <- node_scores %>%
+    left_join(prize_scores, by = "name") %>%
+    mutate(
+      prize = replace_na(prize, 0),
+      prize_rank = replace_na(prize_rank, 0)
+    ) %>%
+    group_by(module) %>%
+    mutate(
+      local_rank = if (n() == 1) 1 else percent_rank(local_strength)
+    ) %>%
+    ungroup() %>%
+    mutate(
+      seed_score =
+        prize_weight * prize_rank +
+        (1 - prize_weight) * local_rank
+    )
+  #readr::write_csv(
+  #  node_scores %>%
+  #    select(
+  #      name,
+  #      module,
+  #      prize,
+  #      prize_rank,
+  #      local_strength,
+  #      local_rank,
+  #      seed_score
+  #    ),
+  #  "results/network_modules.csv"
+  #)
+  
+  # Select modules by ranked prize and degree of nodes
+  #selected_modules <- node_scores %>%
+  #  group_by(module) %>%
+  #  summarise(
+  #module_prize =
+  #    sum(head(sort(prize, decreasing = TRUE), 10)),
+  #  module_hub = sum(head(sort(local_strength, decreasing = TRUE), 5)),#module_hub = max(local_strength),
+  #  .groups = "drop"
+  #) %>%
+  #mutate(
+  #  module_score =
+  #    0.7 * percent_rank(module_prize) +
+  #    0.3 * percent_rank(module_hub)
+  #) %>%
+  #slice_max(module_score, n = n_modules, with_ties = FALSE)
+  # Select modules by PCSF recurrence of top 5 nodes per module
+  selected_modules <- node_scores %>%
+    group_by(module) %>%
+    summarise(
+      module_recurrence =
+        sum(head(sort(local_strength, decreasing = TRUE), 5)),
+      .groups = "drop"
+    ) %>%
+  slice_max(module_recurrence, n = n_modules, with_ties = FALSE)
+  # High-prize/local-hub seeds within each selected module
+  seeds <- node_scores %>%
+    filter(
+      module %in% selected_modules$module,
+      prize > 0
+    ) %>%
+    group_by(module) %>%
+    slice_max(
+      #If you slice_max seed_score, nodes in each module are selected based on prize and recurrence-weighted connectivity in the module, if you use prize, they are selected based on prize only
+      seed_score,#prize
+      n = seeds_per_module,
+      with_ties = FALSE
+    ) %>%
+    ungroup()
+
+  module_info <- node_scores %>%
+    left_join(
+      kinograte_res$nodes %>%
+        transmute(name = Protein, pcsf_type = type),
+      by = "name"
+    ) %>%
+    group_by(module) %>%
+    mutate(seed_rank_in_module = min_rank(desc(seed_score))) %>%
+    ungroup() %>%
+    mutate(
+      selected_module = module %in% selected_modules$module,
+      selected_seed = name %in% seeds$name
+    )
+  readr::write_csv(module_info, "results/network_modules.csv")
+  
+  
+  # Louvain QC
+  mem <- membership(comm)
+  # QC stats
+  ee <- ends(g, E(g), names = FALSE)
+  same <- mem[ee[,1]] == mem[ee[,2]]
+  
+  qc_txt <- sprintf(
+  "%s total edges
+  
+  %s within-module edges       %.1f%%
+  %s between-module edges      %.1f%%
+  
+  Total recurrence weight:
+  %s within modules            %.1f%%
+  %s between modules           %.1f%%
+  
+  weighted modularity Q = %.3f
+  
+  Average recurrence weight:
+  within-module edge           %.2f
+  between-module edge          %.2f",
+    format(ecount(g), big.mark = ","),
+    format(sum(same), big.mark = ","), 100 * mean(same),
+    format(sum(!same), big.mark = ","), 100 * mean(!same),
+    format(sum(w[same]), big.mark = ","), 100 * sum(w[same]) / sum(w),
+    format(sum(w[!same]), big.mark = ","), 100 * sum(w[!same]) / sum(w),
+    modularity(g, mem, weights = w),
+    mean(w[same]),
+    mean(w[!same])
+  )
+  xy <- norm_coords(
+    layout_with_fr(g, weights = w, grid = "nogrid"),
+    xmin = -1, xmax = 1, ymin = -1, ymax = 1
+  )
+  
+  sel <- selected_modules$module
+  pal <- setNames(hcl.colors(length(sel), "Dark 3"), sel)
+  
+  vcol <- rep("#D9D9D980", vcount(g))
+  vcol[mem %in% sel] <- pal[as.character(mem[mem %in% sel])]
+  
+  mods <- sort(unique(mem))
+  M <- matrix(0, length(mods), length(mods), dimnames = list(mods, mods))
+  
+  ii <- match(mem[ee[,1]], mods)
+  jj <- match(mem[ee[,2]], mods)
+  for (k in seq_along(w)) {
+    M[ii[k], jj[k]] <- M[ii[k], jj[k]] + w[k]
+    if (ii[k] != jj[k])
+      M[jj[k], ii[k]] <- M[jj[k], ii[k]] + w[k]
+  }
+  
+  hm_svg <- tempfile(fileext = ".svg")
+  svglite::svglite(hm_svg, 9, 8)
+  heatmap(
+    log1p(M),Rowv = NA, Colv = NA,scale = "none",
+    col = hcl.colors(100, "Inferno", rev = TRUE),margins = c(6, 6),
+    xlab = "Louvain module", ylab = "Louvain module",
+  main = "Module × module PCSF recurrence\n(log1p summed edge weight)")
+  dev.off()
+  
+  svg <- tempfile(fileext = ".svg")
+  dir.create("_site", showWarnings = FALSE)
+  
+  svglite::svglite(svg, 12, 9)
+  plot(
+    g, layout = xy, rescale = FALSE,
+    xlim = c(-1, 1), ylim = c(-1, 1),
+    vertex.size = 2, vertex.label = NA,
+    vertex.color = vcol, vertex.frame.color = NA,
+    edge.color = adjustcolor("grey50", .05),
+    edge.width = .2
+  )
+  
+  cent <- rowsum(
+    xy[mem %in% sel, , drop = FALSE],
+    mem[mem %in% sel]
+  ) / as.vector(table(mem[mem %in% sel]))
+  
+  text(cent[,1], cent[,2], rownames(cent), cex = .9, font = 2)
+  dev.off()
+  
+  #htmltools::save_html(
+  #  htmltools::includeHTML(svg),
+  #  "_site/louvain_clusters.html"
+  #)
+  htmltools::save_html(
+    htmltools::tags$html(
+      htmltools::tags$head(
+        htmltools::tags$title("Louvain cluster QC")
+      ),
+      htmltools::tags$body(
+  
+        htmltools::tags$h2("Louvain module QC statistics"),
+        htmltools::tags$pre(qc_txt),
+  
+        htmltools::tags$hr(),
+  
+        htmltools::tags$h2("Module × module recurrence"),
+        htmltools::includeHTML(hm_svg),
+  
+        htmltools::tags$hr(),
+  
+        htmltools::tags$h2("Recurrence-weighted Louvain clusters"),
+        htmltools::includeHTML(svg)
+      )
+    ),
+    "_site/louvain_clusters.html"
+  )
+  #Above saves Louvain QC
+  unique(seeds$name)
+}
+
+#community centrality w louvain
+genes_input <- get_module_backbone_nodes(
+  kinograte_res,
+  combined_df,
+  n_modules = 6,
+  seeds_per_module = 15,
+  prize_weight = 0.5
+)
+
+#genes_input <- combined %>% head(300) %>% names()
 
 plot <- generate_subnetwork(kinograte_res, genes_input)
 
